@@ -1,7 +1,9 @@
 import streamlit as st
 from PIL import Image
 import io
-import time
+import base64
+import os
+import anthropic
 
 st.set_page_config(
     page_title="掌纹解读",
@@ -325,13 +327,182 @@ def inject_css():
 def init_session_state():
     defaults = {
         "uploaded_image": None,
+        "image_hash": None,       # 用于检测图片是否更换
         "free_report_ready": False,
         "payment_page": False,
         "paid_unlocked": False,
+        "free_report_data": None,  # AI 生成的免费报告内容
+        "full_report_data": None,  # AI 生成的完整报告内容
     }
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+
+def get_anthropic_client():
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        st.error("请设置 ANTHROPIC_API_KEY。如果使用中转站，请同时设置 ANTHROPIC_BASE_URL。")
+        st.stop()
+    base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
+    if base_url:
+        return anthropic.Anthropic(api_key=api_key, base_url=base_url)
+    return anthropic.Anthropic(api_key=api_key)
+
+
+def image_to_base64(image_bytes: bytes) -> tuple[str, str]:
+    """返回 (base64_data, media_type)"""
+    img = Image.open(io.BytesIO(image_bytes))
+    fmt = img.format or "JPEG"
+    media_map = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
+    media_type = media_map.get(fmt, "image/jpeg")
+    buf = io.BytesIO()
+    img.save(buf, format=fmt)
+    return base64.standard_b64encode(buf.getvalue()).decode(), media_type
+
+
+def generate_free_report(image_bytes: bytes) -> dict:
+    """调用 Claude Vision 生成免费报告（3 个模块的表层结论）"""
+    client = get_anthropic_client()
+    b64, media_type = image_to_base64(image_bytes)
+
+    # ── 用户图片作为上下文传入模型 ──
+    prompt = """你是一位专业的掌纹解读师。请仔细观察这张手掌图片，根据你实际看到的掌纹特征（生命线、智慧线、感情线、命运线的走向、深浅、长短、分叉等）进行解读。
+
+请输出以下三个模块的表层判断，每个模块包含：
+1. 一句核心结论（15字以内）
+2. 两到三句解读说明（基于你观察到的具体掌纹特征，不要泛泛而谈）
+
+输出格式（严格按此 JSON 格式）：
+{
+  "thinking_style": {
+    "conclusion": "...",
+    "interpretation": "..."
+  },
+  "relationship_pattern": {
+    "conclusion": "...",
+    "interpretation": "..."
+  },
+  "wealth_path": {
+    "conclusion": "...",
+    "interpretation": "..."
+  }
+}
+
+重要：每个人的掌纹都不同，请根据这张图片的实际特征给出差异化的解读，不要使用通用模板。"""
+
+    response = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=1024,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": b64,  # ← 用户图片传入模型
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+    )
+
+    import json, re
+    text = response.content[0].text
+    # 提取 JSON 块
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        return json.loads(match.group())
+    # 解析失败时返回原始文本，避免崩溃
+    return {"raw": text}
+
+
+def generate_full_report(image_bytes: bytes) -> dict:
+    """调用 Claude Vision 生成完整深度报告（5 个模块）"""
+    client = get_anthropic_client()
+    b64, media_type = image_to_base64(image_bytes)
+
+    # ── 用户图片作为上下文传入模型 ──
+    prompt = """你是一位专业的掌纹解读师。请仔细观察这张手掌图片，根据你实际看到的掌纹特征进行深度解读。
+
+请输出以下五个模块的深度分析，每个模块包含：
+- conclusion：核心结论（15字以内）
+- analysis：深度分析（3-4句，基于具体掌纹特征）
+- blind_spots：盲区或风险（2-3条，用 · 分隔）
+- suggestions：可执行建议（2-3条，用 · 分隔）
+- reminder：一句金句总结
+
+输出格式（严格按此 JSON 格式）：
+{
+  "decision_structure": {
+    "conclusion": "...",
+    "analysis": "...",
+    "blind_spots": "...",
+    "suggestions": "...",
+    "reminder": "..."
+  },
+  "relationship_structure": {
+    "conclusion": "...",
+    "analysis": "...",
+    "blind_spots": "...",
+    "suggestions": "...",
+    "reminder": "..."
+  },
+  "wealth_structure": {
+    "conclusion": "...",
+    "analysis": "...",
+    "blind_spots": "...",
+    "suggestions": "...",
+    "reminder": "..."
+  },
+  "fate_line": {
+    "conclusion": "...",
+    "analysis": "...",
+    "blind_spots": "...",
+    "suggestions": "...",
+    "reminder": "..."
+  },
+  "overall_advice": {
+    "decision": "...",
+    "relationship": "...",
+    "wealth": "..."
+  }
+}
+
+重要：请根据这张图片的实际掌纹特征给出个性化解读，每个人的掌纹都不同，不要使用通用模板。"""
+
+    response = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=2048,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": b64,  # ← 用户图片传入模型
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+    )
+
+    import json, re
+    text = response.content[0].text
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        return json.loads(match.group())
+    return {"raw": text}
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +541,15 @@ def render_upload_section():
     )
 
     if uploaded_file is not None:
-        st.session_state.uploaded_image = uploaded_file.read()
+        raw_bytes = uploaded_file.read()
+        new_hash = hash(raw_bytes)
+        # 图片更换时清除旧的生成结果，避免复用
+        if new_hash != st.session_state.image_hash:
+            st.session_state.uploaded_image = raw_bytes
+            st.session_state.image_hash = new_hash
+            st.session_state.free_report_data = None
+            st.session_state.full_report_data = None
+
         image = Image.open(io.BytesIO(st.session_state.uploaded_image))
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
@@ -417,6 +596,8 @@ def render_free_report():
     if st.button("← 重新上传", key="back_upload"):
         st.session_state.free_report_ready = False
         st.session_state.uploaded_image = None
+        st.session_state.image_hash = None
+        st.session_state.free_report_data = None
         st.rerun()
 
     st.markdown('<div class="page-title" style="font-size:28px;">你的掌纹初读</div>', unsafe_allow_html=True)
@@ -428,35 +609,46 @@ def render_free_report():
             image = Image.open(io.BytesIO(st.session_state.uploaded_image))
             st.image(image, use_column_width=True)
 
-    st.markdown("""
-    <div class="card">
-        <div class="card-module-label">思考方式</div>
-        <div class="conclusion-text" style="margin-bottom:10px;">分析先行，行动在后</div>
-        <div class="interpretation-text">
-            你倾向于在做决定前反复权衡，对"错误决定"有较高的厌恶感。这让你在复杂局面中比多数人更稳，但在信息不完整时容易陷入迟疑。
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # ── 调用 AI 生成报告（仅在尚未生成时调用，避免重复请求）──
+    if st.session_state.free_report_data is None:
+        with st.spinner("正在解读你的掌纹，请稍候…"):
+            st.session_state.free_report_data = generate_free_report(
+                st.session_state.uploaded_image  # ← 用户图片传入
+            )
 
-    st.markdown("""
-    <div class="card">
-        <div class="card-module-label">关系模式</div>
-        <div class="conclusion-text" style="margin-bottom:10px;">重情但克制，慢热而认真</div>
-        <div class="interpretation-text">
-            你在关系中不轻易开口，但一旦投入会非常认真。你对安全感和精神连接的需求高于平均水平，承担的往往比说出口的多。
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    data = st.session_state.free_report_data
 
-    st.markdown("""
-    <div class="card">
-        <div class="card-module-label">财富路径</div>
-        <div class="conclusion-text" style="margin-bottom:10px;">长期积累型，不适合短期投机</div>
-        <div class="interpretation-text">
-            你更擅长通过专业能力和系统性方法积累财富，而不是靠时机爆发。前期感觉慢，但一旦形成方法论，会进入稳定上升通道。
+    # 兼容解析失败的情况
+    if "raw" in data:
+        st.markdown(f'<div class="card"><div class="interpretation-text">{data["raw"]}</div></div>', unsafe_allow_html=True)
+    else:
+        ts = data.get("thinking_style", {})
+        rp = data.get("relationship_pattern", {})
+        wp = data.get("wealth_path", {})
+
+        st.markdown(f"""
+        <div class="card">
+            <div class="card-module-label">思考方式</div>
+            <div class="conclusion-text" style="margin-bottom:10px;">{ts.get("conclusion", "")}</div>
+            <div class="interpretation-text">{ts.get("interpretation", "")}</div>
         </div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+
+        st.markdown(f"""
+        <div class="card">
+            <div class="card-module-label">关系模式</div>
+            <div class="conclusion-text" style="margin-bottom:10px;">{rp.get("conclusion", "")}</div>
+            <div class="interpretation-text">{rp.get("interpretation", "")}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown(f"""
+        <div class="card">
+            <div class="card-module-label">财富路径</div>
+            <div class="conclusion-text" style="margin-bottom:10px;">{wp.get("conclusion", "")}</div>
+            <div class="interpretation-text">{wp.get("interpretation", "")}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     # Upsell
     st.markdown("""
@@ -557,143 +749,75 @@ def render_full_report():
     st.markdown('<div class="page-title" style="font-size:28px;">完整掌纹深度报告</div>', unsafe_allow_html=True)
     st.markdown('<div class="page-subtitle" style="margin-bottom:28px;">结构性解读 · 共 5 个模块</div>', unsafe_allow_html=True)
 
-    # 模块一：决策结构与盲区
-    st.markdown("""
-    <div class="card">
-        <div class="card-module-label">模块一 · 决策结构</div>
-        <div class="card-title">你如何做决定，以及在哪里会卡住</div>
-        <div class="conclusion-row">
-            <span class="conclusion-label">结论</span>
-            <span class="conclusion-text">分析驱动型，对不确定性有较高的心理成本</span>
-        </div>
-        <div class="interpretation-text">
-            你的智慧线走势显示出一种典型的"内部处理优先"模式：在做出判断之前，你需要先在脑子里把信息跑一遍，确认逻辑自洽，才会行动。这在复杂决策中是优势——你不容易被情绪或外部压力带偏。
-        </div>
-        <div style="background:#0d0f13;border-radius:10px;padding:18px 20px;margin:14px 0;">
-            <div style="font-size:12px;font-weight:700;color:#c6a86b;letter-spacing:0.1em;margin-bottom:10px;">盲区：在这些场景下你最容易卡住</div>
-            <div style="font-size:13px;color:#8a8a9a;line-height:2;">
-                · 信息不完整时，倾向于等待而不是试探性行动<br>
-                · 面对"没有标准答案"的选择（比如换城市、换方向），容易陷入反复权衡<br>
-                · 当别人催促你做决定时，会产生明显的抵触感，即使你内心已经有了倾向
-            </div>
-        </div>
-        <div style="background:#0d0f13;border-radius:10px;padding:18px 20px;margin:14px 0;">
-            <div style="font-size:12px;font-weight:700;color:#c6a86b;letter-spacing:0.1em;margin-bottom:10px;">可执行的调整方向</div>
-            <div style="font-size:13px;color:#8a8a9a;line-height:2;">
-                · 给自己设定"决策截止时间"，而不是等到完全清晰<br>
-                · 把"试一试"和"最终决定"分开——很多事情可以先小规模验证<br>
-                · 当你发现自己在同一个问题上想了超过3天，这通常是情绪问题，不是信息问题
-            </div>
-        </div>
-        <div class="reminder-box">你不是缺乏判断力，而是对"错误"的代价估算得太高。</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # ── 调用 AI 生成完整报告（仅在尚未生成时调用）──
+    if st.session_state.full_report_data is None:
+        with st.spinner("正在生成完整深度报告，请稍候…"):
+            st.session_state.full_report_data = generate_full_report(
+                st.session_state.uploaded_image  # ← 用户图片传入
+            )
 
-    # 模块二：关系结构与反复模式
-    st.markdown("""
-    <div class="card">
-        <div class="card-module-label">模块二 · 关系结构</div>
-        <div class="card-title">你在亲密关系中最容易反复的模式</div>
-        <div class="conclusion-row">
-            <span class="conclusion-label">结论</span>
-            <span class="conclusion-text">高投入、低表达，容易在关系中"消失"</span>
-        </div>
-        <div class="interpretation-text">
-            你的感情线结构显示：你在关系中的情感投入是真实且深度的，但你表达情感的方式是行动而非语言。你倾向于用"做事"来代替"说话"——帮对方解决问题、默默承担、保持稳定，而不是直接说"我需要你"或"我不舒服"。
-        </div>
-        <div style="background:#0d0f13;border-radius:10px;padding:18px 20px;margin:14px 0;">
-            <div style="font-size:12px;font-weight:700;color:#c6a86b;letter-spacing:0.1em;margin-bottom:10px;">最容易反复的循环</div>
-            <div style="font-size:13px;color:#8a8a9a;line-height:2;">
-                · 你承担得越多，对方越难感知你的真实需求<br>
-                · 积累到一定程度，你会突然"冷掉"——不是不在乎，而是消耗完了<br>
-                · 对方感到困惑，你感到委屈，但双方都没说清楚发生了什么<br>
-                · 这个循环在你的关系史里可能已经出现过不止一次
-            </div>
-        </div>
-        <div style="background:#0d0f13;border-radius:10px;padding:18px 20px;margin:14px 0;">
-            <div style="font-size:12px;font-weight:700;color:#c6a86b;letter-spacing:0.1em;margin-bottom:10px;">如何从结构上打破它</div>
-            <div style="font-size:13px;color:#8a8a9a;line-height:2;">
-                · 在还没有积累到"冷掉"之前，练习说出一件小事："这件事让我有点累"<br>
-                · 找一个能接住你"不完美状态"的人，而不是只在你表现好的时候靠近你<br>
-                · 你不需要等到"完全确定"才开口，试探性的表达也是表达
-            </div>
-        </div>
-        <div class="reminder-box">你在关系里的问题，不是不够爱，而是爱得太安静。</div>
-    </div>
-    """, unsafe_allow_html=True)
+    data = st.session_state.full_report_data
 
-    # 模块三：财富结构与时间窗口
-    st.markdown("""
-    <div class="card">
-        <div class="card-module-label">模块三 · 财富结构</div>
-        <div class="card-title">你的财富起势在哪个阶段，现在该做什么</div>
-        <div class="conclusion-row">
-            <span class="conclusion-label">结论</span>
-            <span class="conclusion-text">方法论驱动型，财富加速发生在"体系成型"之后</span>
-        </div>
-        <div class="interpretation-text">
-            你的命运线走势暗示一种"慢热型"财富结构：前期积累速度不快，但不是因为能力不足，而是因为你需要更长的时间来建立自己的方法论。一旦这套方法论成型，你的财富积累速度会明显快于同龄人。
-        </div>
-        <div style="background:#0d0f13;border-radius:10px;padding:18px 20px;margin:14px 0;">
-            <div style="font-size:12px;font-weight:700;color:#c6a86b;letter-spacing:0.1em;margin-bottom:10px;">财富节奏的三个阶段</div>
-            <div style="font-size:13px;color:#8a8a9a;line-height:2;">
-                · <span style="color:#c6a86b;">积累期（当下）</span>：专注于建立可复用的能力或资产，不要因为"慢"而焦虑换方向<br>
-                · <span style="color:#c6a86b;">加速期（方法论成型后）</span>：你的优势会开始复利，这个阶段适合加大投入<br>
-                · <span style="color:#c6a86b;">收获期</span>：更适合资产型收入，而不是继续靠时间换钱
-            </div>
-        </div>
-        <div style="background:#0d0f13;border-radius:10px;padding:18px 20px;margin:14px 0;">
-            <div style="font-size:12px;font-weight:700;color:#c6a86b;letter-spacing:0.1em;margin-bottom:10px;">现在最该做的一件事</div>
-            <div style="font-size:13px;color:#8a8a9a;line-height:2;">
-                不是找更多机会，而是把你已经在做的事情做深——直到它变成别人无法轻易复制的东西。你的财富风险不来自外部，而来自你自己的焦虑和频繁换方向。
-            </div>
-        </div>
-        <div class="reminder-box">你不是走得慢，你是在等一个真正值得加速的方向。</div>
-    </div>
-    """, unsafe_allow_html=True)
+    if "raw" in data:
+        st.markdown(f'<div class="card"><div class="interpretation-text">{data["raw"]}</div></div>', unsafe_allow_html=True)
+        return
 
-    # 模块四：命运线深度解读
-    st.markdown("""
-    <div class="card">
-        <div class="card-module-label">模块四 · 命运线</div>
-        <div class="card-title">你的人生路径结构</div>
-        <div class="conclusion-row">
-            <span class="conclusion-label">结论</span>
-            <span class="conclusion-text">自主驱动型，不依赖外部机遇，靠内部积累成事</span>
-        </div>
-        <div class="interpretation-text">
-            你的命运线从掌心中部延伸，而不是从手腕底部起始——这在掌纹学中意味着你的人生转折点通常来自内部的觉醒或主动选择，而不是外部的机遇或他人的推动。你不是那种"被时代选中"的人，而是"自己选择时代"的人。
-        </div>
-        <div style="background:#0d0f13;border-radius:10px;padding:18px 20px;margin:14px 0;">
-            <div style="font-size:12px;font-weight:700;color:#c6a86b;letter-spacing:0.1em;margin-bottom:10px;">这意味着什么</div>
-            <div style="font-size:13px;color:#8a8a9a;line-height:2;">
-                · 你的关键转折点，往往发生在你"想清楚了某件事"之后<br>
-                · 等待外部机会对你来说效率很低，主动创造条件才是你的节奏<br>
-                · 你适合在一个方向上深耕，而不是广撒网
+    def render_module(label, title, d):
+        blind_spots_html = "".join(
+            f'· {line.strip()}<br>' for line in d.get("blind_spots", "").split("·") if line.strip()
+        )
+        suggestions_html = "".join(
+            f'· {line.strip()}<br>' for line in d.get("suggestions", "").split("·") if line.strip()
+        )
+        st.markdown(f"""
+        <div class="card">
+            <div class="card-module-label">{label}</div>
+            <div class="card-title">{title}</div>
+            <div class="conclusion-row">
+                <span class="conclusion-label">结论</span>
+                <span class="conclusion-text">{d.get("conclusion", "")}</span>
             </div>
+            <div class="interpretation-text">{d.get("analysis", "")}</div>
+            <div style="background:#0d0f13;border-radius:10px;padding:18px 20px;margin:14px 0;">
+                <div style="font-size:12px;font-weight:700;color:#c6a86b;letter-spacing:0.1em;margin-bottom:10px;">盲区 / 风险</div>
+                <div style="font-size:13px;color:#8a8a9a;line-height:2;">{blind_spots_html}</div>
+            </div>
+            <div style="background:#0d0f13;border-radius:10px;padding:18px 20px;margin:14px 0;">
+                <div style="font-size:12px;font-weight:700;color:#c6a86b;letter-spacing:0.1em;margin-bottom:10px;">可执行的调整方向</div>
+                <div style="font-size:13px;color:#8a8a9a;line-height:2;">{suggestions_html}</div>
+            </div>
+            <div class="reminder-box">{d.get("reminder", "")}</div>
         </div>
-        <div class="reminder-box">你的路，是自己走出来的，不是等来的。</div>
-    </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
+
+    render_module("模块一 · 决策结构", "你如何做决定，以及在哪里会卡住",
+                  data.get("decision_structure", {}))
+    render_module("模块二 · 关系结构", "你在亲密关系中最容易反复的模式",
+                  data.get("relationship_structure", {}))
+    render_module("模块三 · 财富结构", "你的财富起势在哪个阶段，现在该做什么",
+                  data.get("wealth_structure", {}))
+    render_module("模块四 · 命运线", "你的人生路径结构",
+                  data.get("fate_line", {}))
 
     # 模块五：综合建议
-    st.markdown("""
+    oa = data.get("overall_advice", {})
+    st.markdown(f"""
     <div class="card">
         <div class="card-module-label">模块五 · 综合建议</div>
         <div class="card-title">给你的三条具体建议</div>
         <div style="margin-bottom:18px;">
             <div style="font-size:13px;font-weight:700;color:#c6a86b;margin-bottom:8px;">01 · 关于决策</div>
-            <div style="font-size:14px;color:#8a8a9a;line-height:1.9;">给每个悬而未决的问题设一个"到期日"。不是逼自己，而是承认：有些事情等不到完全清晰，行动本身就是获取信息的方式。</div>
+            <div style="font-size:14px;color:#8a8a9a;line-height:1.9;">{oa.get("decision", "")}</div>
         </div>
         <hr class="section-divider">
         <div style="margin:18px 0;">
             <div style="font-size:13px;font-weight:700;color:#c6a86b;margin-bottom:8px;">02 · 关于关系</div>
-            <div style="font-size:14px;color:#8a8a9a;line-height:1.9;">在关系里练习"提前说"。不要等到积累到临界点才开口，而是在还有余量的时候，说一件小事。这不是抱怨，是让对方有机会靠近你。</div>
+            <div style="font-size:14px;color:#8a8a9a;line-height:1.9;">{oa.get("relationship", "")}</div>
         </div>
         <hr class="section-divider">
         <div style="margin-top:18px;">
             <div style="font-size:13px;font-weight:700;color:#c6a86b;margin-bottom:8px;">03 · 关于财富</div>
-            <div style="font-size:14px;color:#8a8a9a;line-height:1.9;">接下来12个月，不要新增方向，而是把你已经在做的事情做到"别人来找你"的程度。你的财富加速，发生在你成为某个领域里不可替代的那一刻。</div>
+            <div style="font-size:14px;color:#8a8a9a;line-height:1.9;">{oa.get("wealth", "")}</div>
         </div>
     </div>
     """, unsafe_allow_html=True)

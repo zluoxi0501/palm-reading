@@ -394,29 +394,32 @@ def generate_free_report(image_bytes: bytes) -> dict:
     try:
         client = get_anthropic_client()
         b64, media_type = image_to_base64(image_bytes)
-        prompt = """你是一位专业的掌纹解读师。请仔细观察这张手掌图片，根据你实际看到的掌纹特征（生命线、智慧线、感情线、命运线的走向、深浅、长短、分叉等）进行解读。
+        prompt = """你是一位专业的掌纹解读师。请极其仔细地观察这张手掌图片中的每一条纹路。
 
-请输出以下三个模块的表层判断，每个模块包含：
-1. 一句核心结论（15字以内）
-2. 两到三句解读说明（基于你观察到的具体掌纹特征，不要泛泛而谈）
+第一步：先描述你实际看到的具体特征，例如：
+- 智慧线是笔直还是弯曲？起点与生命线粘连多长？末端走向哪里？
+- 感情线弧度高还是低？末端是否分叉？线条深浅如何？
+- 生命线弧度大还是小？是否有岛纹或断裂？
+- 命运线是否存在？从哪里起始？清晰还是模糊？
+
+第二步：基于你观察到的具体特征，输出以下三个模块。每个模块的 interpretation 必须引用你看到的具体掌纹细节（如"你的感情线末端向食指方向弯曲"），不允许使用"你倾向于""你通常"等泛泛描述。
 
 输出格式（严格按此 JSON 格式）：
 {
   "thinking_style": {
-    "conclusion": "...",
-    "interpretation": "..."
+    "conclusion": "15字以内的核心结论",
+    "interpretation": "基于具体掌纹特征的2-3句解读，必须包含你观察到的线条细节"
   },
   "relationship_pattern": {
-    "conclusion": "...",
-    "interpretation": "..."
+    "conclusion": "15字以内的核心结论",
+    "interpretation": "基于具体掌纹特征的2-3句解读，必须包含你观察到的线条细节"
   },
   "wealth_path": {
-    "conclusion": "...",
-    "interpretation": "..."
+    "conclusion": "15字以内的核心结论",
+    "interpretation": "基于具体掌纹特征的2-3句解读，必须包含你观察到的线条细节"
   }
 }
 
-重要：每个人的掌纹都不同，请根据这张图片的实际特征给出差异化的解读，不要使用通用模板。
 只输出 JSON，不要有任何前缀说明、后缀解释或 markdown 代码块。"""
 
         response = client.messages.create(
@@ -452,53 +455,55 @@ def generate_full_report(image_bytes: bytes) -> dict:
     try:
         client = get_anthropic_client()
         b64, media_type = image_to_base64(image_bytes)
-        prompt = """你是一位专业的掌纹解读师。请仔细观察这张手掌图片，根据你实际看到的掌纹特征进行深度解读。
+        prompt = """你是一位专业的掌纹解读师。请极其仔细地观察这张手掌图片中的每一条纹路。
 
-请输出以下五个模块的深度分析，每个模块包含：
-- conclusion：核心结论（15字以内）
-- analysis：深度分析（3-4句，基于具体掌纹特征）
-- blind_spots：盲区或风险（2-3条，用 · 分隔）
-- suggestions：可执行建议（2-3条，用 · 分隔）
-- reminder：一句金句总结
+第一步：先在脑中记录你实际看到的具体特征：
+- 智慧线（头脑线）：笔直/弯曲？起点与生命线粘连多长？末端走向？有无分叉？
+- 感情线（心线）：弧度高低？末端位置？是否分叉或有链状纹？线条深浅？
+- 生命线：弧度大小？是否饱满？有无岛纹、断裂或支线？
+- 命运线：是否存在？从哪里起始？清晰还是模糊？走向如何？
+
+第二步：基于你观察到的具体特征，输出五个模块的深度分析。
+每个模块的 analysis 必须引用你看到的具体掌纹细节（如"你的感情线末端向食指方向弯曲且有轻微分叉"），禁止使用"你倾向于""你通常""你可能"等无法从图片验证的泛泛描述。
+blind_spots 和 suggestions 每条用 · 分隔。
 
 输出格式（严格按此 JSON 格式）：
 {
   "decision_structure": {
-    "conclusion": "...",
-    "analysis": "...",
-    "blind_spots": "...",
-    "suggestions": "...",
-    "reminder": "..."
+    "conclusion": "15字以内",
+    "analysis": "3-4句，必须引用具体掌纹特征",
+    "blind_spots": "条目1 · 条目2 · 条目3",
+    "suggestions": "条目1 · 条目2 · 条目3",
+    "reminder": "一句金句"
   },
   "relationship_structure": {
-    "conclusion": "...",
-    "analysis": "...",
-    "blind_spots": "...",
-    "suggestions": "...",
-    "reminder": "..."
+    "conclusion": "15字以内",
+    "analysis": "3-4句，必须引用具体掌纹特征",
+    "blind_spots": "条目1 · 条目2 · 条目3",
+    "suggestions": "条目1 · 条目2 · 条目3",
+    "reminder": "一句金句"
   },
   "wealth_structure": {
-    "conclusion": "...",
-    "analysis": "...",
-    "blind_spots": "...",
-    "suggestions": "...",
-    "reminder": "..."
+    "conclusion": "15字以内",
+    "analysis": "3-4句，必须引用具体掌纹特征",
+    "blind_spots": "条目1 · 条目2 · 条目3",
+    "suggestions": "条目1 · 条目2 · 条目3",
+    "reminder": "一句金句"
   },
   "fate_line": {
-    "conclusion": "...",
-    "analysis": "...",
-    "blind_spots": "...",
-    "suggestions": "...",
-    "reminder": "..."
+    "conclusion": "15字以内",
+    "analysis": "3-4句，必须引用具体掌纹特征",
+    "blind_spots": "条目1 · 条目2 · 条目3",
+    "suggestions": "条目1 · 条目2 · 条目3",
+    "reminder": "一句金句"
   },
   "overall_advice": {
-    "decision": "...",
-    "relationship": "...",
-    "wealth": "..."
+    "decision": "针对此人掌纹的具体建议",
+    "relationship": "针对此人掌纹的具体建议",
+    "wealth": "针对此人掌纹的具体建议"
   }
 }
 
-重要：请根据这张图片的实际掌纹特征给出个性化解读，每个人的掌纹都不同，不要使用通用模板。
 只输出 JSON，不要有任何前缀说明、后缀解释或 markdown 代码块。"""
 
         response = client.messages.create(

@@ -365,13 +365,21 @@ def image_to_base64(image_bytes: bytes) -> tuple[str, str]:
 
 
 def extract_json(text: str) -> dict | None:
-    """从模型输出中提取 JSON 对象，优先直接解析，再用括号追踪"""
-    # 先尝试直接解析（模型有时直接返回纯 JSON）
+    """从模型输出中提取 JSON 对象"""
+    # 优先从 ```json 代码块提取
+    import re
+    block = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if block:
+        try:
+            return json.loads(block.group(1))
+        except json.JSONDecodeError:
+            pass
+    # 直接解析整段文本
     try:
         return json.loads(text.strip())
     except json.JSONDecodeError:
         pass
-    # 找到第一个 { 到最后一个 } 之间的内容
+    # 截取第一个 { 到最后一个 }
     start = text.find("{")
     end = text.rfind("}")
     if start != -1 and end != -1 and end > start:
@@ -408,7 +416,8 @@ def generate_free_report(image_bytes: bytes) -> dict:
   }
 }
 
-重要：每个人的掌纹都不同，请根据这张图片的实际特征给出差异化的解读，不要使用通用模板。"""
+重要：每个人的掌纹都不同，请根据这张图片的实际特征给出差异化的解读，不要使用通用模板。
+只输出 JSON，不要有任何前缀说明、后缀解释或 markdown 代码块。"""
 
         response = client.messages.create(
             model="claude-opus-4-6",
@@ -489,7 +498,8 @@ def generate_full_report(image_bytes: bytes) -> dict:
   }
 }
 
-重要：请根据这张图片的实际掌纹特征给出个性化解读，每个人的掌纹都不同，不要使用通用模板。"""
+重要：请根据这张图片的实际掌纹特征给出个性化解读，每个人的掌纹都不同，不要使用通用模板。
+只输出 JSON，不要有任何前缀说明、后缀解释或 markdown 代码块。"""
 
         response = client.messages.create(
             model="claude-opus-4-6",

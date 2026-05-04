@@ -365,22 +365,20 @@ def image_to_base64(image_bytes: bytes) -> tuple[str, str]:
 
 
 def extract_json(text: str) -> dict | None:
-    """从模型输出中提取最外层 JSON 对象，比正则更健壮"""
-    import json
+    """从模型输出中提取 JSON 对象，优先直接解析，再用括号追踪"""
+    # 先尝试直接解析（模型有时直接返回纯 JSON）
+    try:
+        return json.loads(text.strip())
+    except json.JSONDecodeError:
+        pass
+    # 找到第一个 { 到最后一个 } 之间的内容
     start = text.find("{")
-    if start == -1:
-        return None
-    depth = 0
-    for i, ch in enumerate(text[start:], start):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[start:i+1])
-                except json.JSONDecodeError:
-                    return None
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(text[start:end+1])
+        except json.JSONDecodeError:
+            pass
     return None
 
 

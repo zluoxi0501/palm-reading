@@ -3,6 +3,9 @@ from PIL import Image
 import io
 import base64
 import os
+import hashlib
+import json
+import re
 import anthropic
 
 st.set_page_config(
@@ -361,13 +364,31 @@ def image_to_base64(image_bytes: bytes) -> tuple[str, str]:
     return base64.standard_b64encode(buf.getvalue()).decode(), media_type
 
 
-def generate_free_report(image_bytes: bytes) -> dict:
-    """调用 Claude Vision 生成免费报告（3 个模块的表层结论）"""
-    client = get_anthropic_client()
-    b64, media_type = image_to_base64(image_bytes)
+def extract_json(text: str) -> dict | None:
+    """从模型输出中提取最外层 JSON 对象，比正则更健壮"""
+    import json
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start:i+1])
+                except json.JSONDecodeError:
+                    return None
+    return None
 
-    # ── 用户图片作为上下文传入模型 ──
-    prompt = """你是一位专业的掌纹解读师。请仔细观察这张手掌图片，根据你实际看到的掌纹特征（生命线、智慧线、感情线、命运线的走向、深浅、长短、分叉等）进行解读。
+
+def generate_free_report(image_bytes: bytes) -> dict:
+    try:
+        client = get_anthropic_client()
+        b64, media_type = image_to_base64(image_bytes)
+        prompt = """你是一位专业的掌纹解读师。请仔细观察这张手掌图片，根据你实际看到的掌纹特征（生命线、智慧线、感情线、命运线的走向、深浅、长短、分叉等）进行解读。
 
 请输出以下三个模块的表层判断，每个模块包含：
 1. 一句核心结论（15字以内）
@@ -391,44 +412,40 @@ def generate_free_report(image_bytes: bytes) -> dict:
 
 重要：每个人的掌纹都不同，请根据这张图片的实际特征给出差异化的解读，不要使用通用模板。"""
 
-    response = client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=1024,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": b64,  # ← 用户图片传入模型
+        response = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=1024,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": b64,  # ← 用户图片传入模型
+                            },
                         },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
-    )
-
-    import json, re
-    text = response.content[0].text
-    # 提取 JSON 块
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        return json.loads(match.group())
-    # 解析失败时返回原始文本，避免崩溃
-    return {"raw": text}
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        )
+        text = response.content[0].text
+        result = extract_json(text)
+        if result:
+            return result
+        return {"raw": text}
+    except Exception as e:
+        return {"error": True, "message": str(e)}
 
 
 def generate_full_report(image_bytes: bytes) -> dict:
-    """调用 Claude Vision 生成完整深度报告（5 个模块）"""
-    client = get_anthropic_client()
-    b64, media_type = image_to_base64(image_bytes)
-
-    # ── 用户图片作为上下文传入模型 ──
-    prompt = """你是一位专业的掌纹解读师。请仔细观察这张手掌图片，根据你实际看到的掌纹特征进行深度解读。
+    try:
+        client = get_anthropic_client()
+        b64, media_type = image_to_base64(image_bytes)
+        prompt = """你是一位专业的掌纹解读师。请仔细观察这张手掌图片，根据你实际看到的掌纹特征进行深度解读。
 
 请输出以下五个模块的深度分析，每个模块包含：
 - conclusion：核心结论（15字以内）
@@ -476,33 +493,33 @@ def generate_full_report(image_bytes: bytes) -> dict:
 
 重要：请根据这张图片的实际掌纹特征给出个性化解读，每个人的掌纹都不同，不要使用通用模板。"""
 
-    response = client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=2048,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": b64,  # ← 用户图片传入模型
+        response = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=2048,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": b64,  # ← 用户图片传入模型
+                            },
                         },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
-    )
-
-    import json, re
-    text = response.content[0].text
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        return json.loads(match.group())
-    return {"raw": text}
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        )
+        text = response.content[0].text
+        result = extract_json(text)
+        if result:
+            return result
+        return {"raw": text}
+    except Exception as e:
+        return {"error": True, "message": str(e)}
 
 
 # ---------------------------------------------------------------------------
@@ -541,14 +558,18 @@ def render_upload_section():
     )
 
     if uploaded_file is not None:
-        raw_bytes = uploaded_file.read()
-        new_hash = hash(raw_bytes)
+        raw_bytes = uploaded_file.getvalue()
+        new_hash = hashlib.md5(raw_bytes).hexdigest()  # 稳定 hash，不受进程重启影响
         # 图片更换时清除旧的生成结果，避免复用
         if new_hash != st.session_state.image_hash:
             st.session_state.uploaded_image = raw_bytes
             st.session_state.image_hash = new_hash
             st.session_state.free_report_data = None
             st.session_state.full_report_data = None
+            st.session_state.free_report_ready = False
+            st.session_state.paid_unlocked = False
+
+        st.caption(f"当前图片ID：{new_hash[:8]}")  # debug：确认换图后 hash 是否变化
 
         image = Image.open(io.BytesIO(st.session_state.uploaded_image))
         col1, col2, col3 = st.columns([1, 2, 1])
@@ -558,6 +579,9 @@ def render_upload_section():
         col_a, col_b, col_c = st.columns([1, 2, 1])
         with col_b:
             if st.button("开始解读", use_container_width=True, type="primary"):
+                # 每次点击"开始解读"强制清空旧报告，确保重新调用 API
+                st.session_state.free_report_data = None
+                st.session_state.full_report_data = None
                 st.session_state.free_report_ready = True
                 st.rerun()
 
@@ -617,6 +641,11 @@ def render_free_report():
             )
 
     data = st.session_state.free_report_data
+
+    # API 调用失败时显示明确错误
+    if data.get("error"):
+        st.error(f"图片分析失败，请检查 API Key / Base URL / 模型是否支持图片。\n\n错误详情：{data.get('message', '')}")
+        return
 
     # 兼容解析失败的情况
     if "raw" in data:
@@ -757,6 +786,10 @@ def render_full_report():
             )
 
     data = st.session_state.full_report_data
+
+    if data.get("error"):
+        st.error(f"图片分析失败，请检查 API Key / Base URL / 模型是否支持图片。\n\n错误详情：{data.get('message', '')}")
+        return
 
     if "raw" in data:
         st.markdown(f'<div class="card"><div class="interpretation-text">{data["raw"]}</div></div>', unsafe_allow_html=True)

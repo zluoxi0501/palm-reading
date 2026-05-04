@@ -645,10 +645,17 @@ def render_free_report():
         st.error(f"图片分析失败，请检查 API Key / Base URL / 模型是否支持图片。\n\n错误详情：{data.get('message', '')}")
         return
 
-    # 兼容解析失败的情况
+    # 兼容解析失败的情况：尝试从 raw 文本中恢复 JSON
     if "raw" in data:
-        st.markdown(f'<div class="card"><div class="interpretation-text">{data["raw"]}</div></div>', unsafe_allow_html=True)
-    else:
+        recovered = extract_json(data["raw"])
+        if recovered and "thinking_style" in recovered:
+            data = recovered
+            st.session_state.free_report_data = recovered
+        else:
+            st.markdown(f'<div class="card"><div class="interpretation-text">{data["raw"]}</div></div>', unsafe_allow_html=True)
+            data = None
+
+    if data:
         ts = data.get("thinking_style", {})
         rp = data.get("relationship_pattern", {})
         wp = data.get("wealth_path", {})
@@ -790,9 +797,15 @@ def render_full_report():
         st.error(f"图片分析失败，请检查 API Key / Base URL / 模型是否支持图片。\n\n错误详情：{data.get('message', '')}")
         return
 
+    # 如果 extract_json 失败降级到 raw，尝试再解析一次
     if "raw" in data:
-        st.markdown(f'<div class="card"><div class="interpretation-text">{data["raw"]}</div></div>', unsafe_allow_html=True)
-        return
+        recovered = extract_json(data["raw"])
+        if recovered and "decision_structure" in recovered:
+            data = recovered
+            st.session_state.full_report_data = recovered  # 更新缓存
+        else:
+            st.markdown(f'<div class="card"><div class="interpretation-text">{data["raw"]}</div></div>', unsafe_allow_html=True)
+            return
 
     def render_module(label, title, d):
         blind_spots_html = "".join(

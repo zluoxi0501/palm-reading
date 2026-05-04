@@ -646,12 +646,14 @@ def render_free_report():
             image = Image.open(io.BytesIO(st.session_state.uploaded_image))
             st.image(image, use_column_width=True)
 
-    # ── 调用 AI 生成报告（仅在尚未生成时调用，避免重复请求）──
-    if st.session_state.free_report_data is None:
+    # ── 调用 AI 生成报告：hash 变化或无缓存时重新生成 ──
+    current_hash = st.session_state.image_hash
+    cached = st.session_state.free_report_data
+    if cached is None or cached.get("_hash") != current_hash:
         with st.spinner("正在解读你的掌纹，请稍候…"):
-            st.session_state.free_report_data = generate_free_report(
-                st.session_state.uploaded_image  # ← 用户图片传入
-            )
+            result = generate_free_report(st.session_state.uploaded_image)
+            result["_hash"] = current_hash  # 记录生成时的图片 hash
+            st.session_state.free_report_data = result
 
     data = st.session_state.free_report_data
 
@@ -799,12 +801,14 @@ def render_full_report():
     st.markdown('<div class="page-title" style="font-size:28px;">完整掌纹深度报告</div>', unsafe_allow_html=True)
     st.markdown('<div class="page-subtitle" style="margin-bottom:28px;">结构性解读 · 共 5 个模块</div>', unsafe_allow_html=True)
 
-    # ── 调用 AI 生成完整报告（仅在尚未生成时调用）──
-    if st.session_state.full_report_data is None:
+    # ── 调用 AI 生成完整报告：hash 变化或无缓存时重新生成 ──
+    current_hash = st.session_state.image_hash
+    cached = st.session_state.full_report_data
+    if cached is None or cached.get("_hash") != current_hash:
         with st.spinner("正在生成完整深度报告，请稍候…"):
-            st.session_state.full_report_data = generate_full_report(
-                st.session_state.uploaded_image  # ← 用户图片传入
-            )
+            result = generate_full_report(st.session_state.uploaded_image)
+            result["_hash"] = current_hash
+            st.session_state.full_report_data = result
 
     data = st.session_state.full_report_data
 

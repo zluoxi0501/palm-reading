@@ -760,6 +760,7 @@ def render_payment_section():
     col_a, col_b, col_c = st.columns([1, 2, 1])
     with col_b:
         if st.button("测试解锁完整解读", use_container_width=True, type="primary", key="manual_unlock"):
+            st.session_state.full_report_data = None  # 强制重新生成，不复用旧结果
             st.session_state.paid_unlocked = True
             st.rerun()
         st.markdown('<div style="text-align:center;font-size:11px;color:#3a3a4a;margin-top:8px;">正式上线后，将在支付成功后自动解锁完整报告。</div>', unsafe_allow_html=True)

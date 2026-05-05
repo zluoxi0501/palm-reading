@@ -330,12 +330,12 @@ def inject_css():
 def init_session_state():
     defaults = {
         "uploaded_image": None,
-        "image_hash": None,       # 用于检测图片是否更换
+        "last_image_hash": None,      # 上一次生成报告时的图片 hash
         "free_report_ready": False,
         "payment_page": False,
         "paid_unlocked": False,
-        "free_report_data": None,  # AI 生成的免费报告内容
-        "full_report_data": None,  # AI 生成的完整报告内容
+        "free_report_data": None,
+        "full_report_data": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -571,18 +571,19 @@ def render_upload_section():
     )
 
     if uploaded_file is not None:
-        raw_bytes = uploaded_file.getvalue()
-        new_hash = hashlib.md5(raw_bytes).hexdigest()  # 稳定 hash，不受进程重启影响
-        # 图片更换时清除旧的生成结果，避免复用
-        if new_hash != st.session_state.image_hash:
-            st.session_state.uploaded_image = raw_bytes
-            st.session_state.image_hash = new_hash
+        image_bytes = uploaded_file.getvalue()
+        image_hash = hashlib.md5(image_bytes).hexdigest()
+
+        # 新图片：清空所有旧结果
+        if image_hash != st.session_state.last_image_hash:
+            st.session_state.uploaded_image = image_bytes
+            st.session_state.last_image_hash = image_hash
             st.session_state.free_report_data = None
             st.session_state.full_report_data = None
             st.session_state.free_report_ready = False
             st.session_state.paid_unlocked = False
 
-        st.caption(f"当前图片ID：{new_hash[:8]}")  # debug：确认换图后 hash 是否变化
+        st.caption(f"当前图片ID：{image_hash[:8]}")
 
         image = Image.open(io.BytesIO(st.session_state.uploaded_image))
         col1, col2, col3 = st.columns([1, 2, 1])
@@ -592,7 +593,7 @@ def render_upload_section():
         col_a, col_b, col_c = st.columns([1, 2, 1])
         with col_b:
             if st.button("开始解读", use_container_width=True, type="primary"):
-                # 每次点击"开始解读"强制清空旧报告，确保重新调用 API
+                # 每次点击强制清空旧报告，确保重新调用 API
                 st.session_state.free_report_data = None
                 st.session_state.full_report_data = None
                 st.session_state.free_report_ready = True
@@ -633,7 +634,7 @@ def render_free_report():
     if st.button("← 重新上传", key="back_upload"):
         st.session_state.free_report_ready = False
         st.session_state.uploaded_image = None
-        st.session_state.image_hash = None
+        st.session_state.last_image_hash = None
         st.session_state.free_report_data = None
         st.rerun()
 
@@ -646,14 +647,12 @@ def render_free_report():
             image = Image.open(io.BytesIO(st.session_state.uploaded_image))
             st.image(image, use_column_width=True)
 
-    # ── 调用 AI 生成报告：hash 变化或无缓存时重新生成 ──
-    current_hash = st.session_state.image_hash
-    cached = st.session_state.free_report_data
-    if cached is None or cached.get("_hash") != current_hash:
+    # ── 调用 AI 生成报告：无缓存时生成（换图已在上传时清空缓存）──
+    if st.session_state.free_report_data is None:
         with st.spinner("正在解读你的掌纹，请稍候…"):
-            result = generate_free_report(st.session_state.uploaded_image)
-            result["_hash"] = current_hash  # 记录生成时的图片 hash
-            st.session_state.free_report_data = result
+            st.session_state.free_report_data = generate_free_report(
+                st.session_state.uploaded_image
+            )
 
     data = st.session_state.free_report_data
 
@@ -802,13 +801,11 @@ def render_full_report():
     st.markdown('<div class="page-subtitle" style="margin-bottom:28px;">结构性解读 · 共 5 个模块</div>', unsafe_allow_html=True)
 
     # ── 调用 AI 生成完整报告：hash 变化或无缓存时重新生成 ──
-    current_hash = st.session_state.image_hash
-    cached = st.session_state.full_report_data
-    if cached is None or cached.get("_hash") != current_hash:
+    if st.session_state.full_report_data is None:
         with st.spinner("正在生成完整深度报告，请稍候…"):
-            result = generate_full_report(st.session_state.uploaded_image)
-            result["_hash"] = current_hash
-            st.session_state.full_report_data = result
+            st.session_state.full_report_data = generate_full_report(
+                st.session_state.uploaded_image
+            )
 
     data = st.session_state.full_report_data
 

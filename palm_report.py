@@ -735,41 +735,45 @@ def render_free_report():
     # 兼容解析失败的情况：尝试从 raw 文本中恢复 JSON
     if "raw" in data:
         recovered = extract_json(data["raw"])
-        if recovered and "thinking_style" in recovered:
+        if recovered and isinstance(recovered, dict) and "thinking_style" in recovered:
+            recovered["_vision_description"] = data.get("_vision_description", "")
+            recovered["_based_on_image"] = data.get("_based_on_image", False)
             data = recovered
             st.session_state.free_report_data = recovered
         else:
-            st.markdown(f'<div class="card"><div class="interpretation-text">{data["raw"]}</div></div>', unsafe_allow_html=True)
-            data = None
+            st.error("报告格式解析失败，请重新生成。")
+            if st.button("重新生成", key="retry_free"):
+                st.session_state.free_report_data = None
+                st.rerun()
+            return
 
-    if data:
-        ts = data.get("thinking_style", {})
-        rp = data.get("relationship_pattern", {})
-        wp = data.get("wealth_path", {})
+    ts = data.get("thinking_style", {})
+    rp = data.get("relationship_pattern", {})
+    wp = data.get("wealth_path", {})
 
-        st.markdown(f"""
-        <div class="card">
-            <div class="card-module-label">思考方式</div>
-            <div class="conclusion-text" style="margin-bottom:10px;">{ts.get("conclusion", "")}</div>
-            <div class="interpretation-text">{ts.get("interpretation", "")}</div>
-        </div>
-        """, unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="card">
+        <div class="card-module-label">思考方式</div>
+        <div class="conclusion-text" style="margin-bottom:10px;">{ts.get("conclusion", "")}</div>
+        <div class="interpretation-text">{ts.get("interpretation", "")}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-        st.markdown(f"""
-        <div class="card">
-            <div class="card-module-label">关系模式</div>
-            <div class="conclusion-text" style="margin-bottom:10px;">{rp.get("conclusion", "")}</div>
-            <div class="interpretation-text">{rp.get("interpretation", "")}</div>
-        </div>
-        """, unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="card">
+        <div class="card-module-label">关系模式</div>
+        <div class="conclusion-text" style="margin-bottom:10px;">{rp.get("conclusion", "")}</div>
+        <div class="interpretation-text">{rp.get("interpretation", "")}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-        st.markdown(f"""
-        <div class="card">
-            <div class="card-module-label">财富路径</div>
-            <div class="conclusion-text" style="margin-bottom:10px;">{wp.get("conclusion", "")}</div>
-            <div class="interpretation-text">{wp.get("interpretation", "")}</div>
-        </div>
-        """, unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="card">
+        <div class="card-module-label">财富路径</div>
+        <div class="conclusion-text" style="margin-bottom:10px;">{wp.get("conclusion", "")}</div>
+        <div class="interpretation-text">{wp.get("interpretation", "")}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # Upsell
     st.markdown("""
@@ -899,11 +903,16 @@ def render_full_report():
     # 如果 extract_json 失败降级到 raw，尝试再解析一次
     if "raw" in data:
         recovered = extract_json(data["raw"])
-        if recovered and "decision_structure" in recovered:
+        if recovered and isinstance(recovered, dict) and "decision_structure" in recovered:
+            recovered["_vision_description"] = data.get("_vision_description", "")
+            recovered["_based_on_image"] = data.get("_based_on_image", False)
             data = recovered
-            st.session_state.full_report_data = recovered  # 更新缓存
+            st.session_state.full_report_data = recovered
         else:
-            st.markdown(f'<div class="card"><div class="interpretation-text">{data["raw"]}</div></div>', unsafe_allow_html=True)
+            st.error("报告格式解析失败，请重新生成。")
+            if st.button("重新生成", key="retry_full"):
+                st.session_state.full_report_data = None
+                st.rerun()
             return
 
     def render_module(label, title, d):

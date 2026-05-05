@@ -390,10 +390,46 @@ def extract_json(text: str) -> dict | None:
     return None
 
 
+def verify_vision(client, b64: str, media_type: str) -> dict:
+    """先让模型描述图片内容，验证 Vision 是否生效"""
+    response = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=200,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": media_type, "data": b64},
+                    },
+                    {"type": "text", "text": "请用一句话描述你在这张图片中看到了什么（不超过50字）。"},
+                ],
+            }
+        ],
+    )
+    description = response.content[0].text.strip()
+    # 如果描述里完全没有视觉内容关键词，判定 Vision 未生效
+    vision_keywords = ["图片", "图像", "看到", "显示", "手", "掌", "照片", "画面", "颜色", "物体", "人", "背景"]
+    vision_ok = any(kw in description for kw in vision_keywords)
+    return {"description": description, "vision_ok": vision_ok}
+
+
 def generate_free_report(image_bytes: bytes) -> dict:
     try:
         client = get_anthropic_client()
         b64, media_type = image_to_base64(image_bytes)
+
+        # ── Step 1: 验证 Vision 是否生效 ──
+        vision_check = verify_vision(client, b64, media_type)
+        if not vision_check["vision_ok"]:
+            return {
+                "error": True,
+                "vision_failed": True,
+                "message": f"图片识别未成功，当前接口可能不支持 Vision 图片输入，请检查模型或中转站。\n\n模型返回：{vision_check['description']}",
+                "vision_description": vision_check["description"],
+            }
+
         prompt = """你是一位专业的掌纹解读师。请极其仔细地观察这张手掌图片中的每一条纹路。
 
 第一步：先描述你实际看到的具体特征，例如：
@@ -401,6 +437,8 @@ def generate_free_report(image_bytes: bytes) -> dict:
 - 感情线弧度高还是低？末端是否分叉？线条深浅如何？
 - 生命线弧度大还是小？是否有岛纹或断裂？
 - 命运线是否存在？从哪里起始？清晰还是模糊？
+
+如果图片不是手掌，请直接返回：{"error": "not_palm", "message": "图片不是手掌，无法进行掌纹解读"}
 
 第二步：基于你观察到的具体特征，输出以下三个模块。每个模块的 interpretation 必须引用你看到的具体掌纹细节（如"你的感情线末端向食指方向弯曲"），不允许使用"你倾向于""你通常"等泛泛描述。
 
@@ -431,11 +469,7 @@ def generate_free_report(image_bytes: bytes) -> dict:
                     "content": [
                         {
                             "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": b64,  # ← 用户图片传入模型
-                            },
+                            "source": {"type": "base64", "media_type": media_type, "data": b64},
                         },
                         {"type": "text", "text": prompt},
                     ],
@@ -445,8 +479,9 @@ def generate_free_report(image_bytes: bytes) -> dict:
         text = response.content[0].text
         result = extract_json(text)
         if result:
+            result["_vision_description"] = vision_check["description"]
             return result
-        return {"raw": text}
+        return {"raw": text, "_vision_description": vision_check["description"]}
     except Exception as e:
         return {"error": True, "message": str(e)}
 
@@ -455,6 +490,17 @@ def generate_full_report(image_bytes: bytes) -> dict:
     try:
         client = get_anthropic_client()
         b64, media_type = image_to_base64(image_bytes)
+
+        # ── Step 1: 验证 Vision 是否生效 ──
+        vision_check = verify_vision(client, b64, media_type)
+        if not vision_check["vision_ok"]:
+            return {
+                "error": True,
+                "vision_failed": True,
+                "message": f"图片识别未成功，当前接口可能不支持 Vision 图片输入，请检查模型或中转站。\n\n模型返回：{vision_check['description']}",
+                "vision_description": vision_check["description"],
+            }
+
         prompt = """你是一位专业的掌纹解读师。请极其仔细地观察这张手掌图片中的每一条纹路。
 
 第一步：先在脑中记录你实际看到的具体特征：
@@ -462,6 +508,8 @@ def generate_full_report(image_bytes: bytes) -> dict:
 - 感情线（心线）：弧度高低？末端位置？是否分叉或有链状纹？线条深浅？
 - 生命线：弧度大小？是否饱满？有无岛纹、断裂或支线？
 - 命运线：是否存在？从哪里起始？清晰还是模糊？走向如何？
+
+如果图片不是手掌，请直接返回：{"error": "not_palm", "message": "图片不是手掌，无法进行掌纹解读"}
 
 第二步：基于你观察到的具体特征，输出五个模块的深度分析。
 每个模块的 analysis 必须引用你看到的具体掌纹细节（如"你的感情线末端向食指方向弯曲且有轻微分叉"），禁止使用"你倾向于""你通常""你可能"等无法从图片验证的泛泛描述。
@@ -515,11 +563,7 @@ blind_spots 和 suggestions 每条用 · 分隔。
                     "content": [
                         {
                             "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": b64,  # ← 用户图片传入模型
-                            },
+                            "source": {"type": "base64", "media_type": media_type, "data": b64},
                         },
                         {"type": "text", "text": prompt},
                     ],
@@ -529,8 +573,9 @@ blind_spots 和 suggestions 每条用 · 分隔。
         text = response.content[0].text
         result = extract_json(text)
         if result:
+            result["_vision_description"] = vision_check["description"]
             return result
-        return {"raw": text}
+        return {"raw": text, "_vision_description": vision_check["description"]}
     except Exception as e:
         return {"error": True, "message": str(e)}
 
@@ -656,9 +701,20 @@ def render_free_report():
 
     data = st.session_state.free_report_data
 
-    # API 调用失败时显示明确错误
+    # 调试信息
+    st.caption(f"图片ID：{st.session_state.last_image_hash[:8] if st.session_state.last_image_hash else '无'} | 已发送图片至模型 | 图片描述：{data.get('_vision_description', '待获取')[:30] if data else '—'}")
+
+    # Vision 失败或 API 错误
     if data.get("error"):
-        st.error(f"图片分析失败，请检查 API Key / Base URL / 模型是否支持图片。\n\n错误详情：{data.get('message', '')}")
+        if data.get("vision_failed"):
+            st.error(data.get("message", "图片识别未成功，当前接口可能不支持 Vision 图片输入，请检查模型或中转站。"))
+        else:
+            st.error(f"图片分析失败，请检查 API Key / Base URL / 模型是否支持图片。\n\n错误详情：{data.get('message', '')}")
+        return
+
+    # 非手掌图片
+    if data.get("error") == "not_palm" or (isinstance(data.get("message"), str) and "不是手掌" in data.get("message", "")):
+        st.warning("上传的图片不是手掌，无法进行掌纹解读，请重新上传。")
         return
 
     # 兼容解析失败的情况：尝试从 raw 文本中恢复 JSON
@@ -809,8 +865,18 @@ def render_full_report():
 
     data = st.session_state.full_report_data
 
+    # 调试信息
+    st.caption(f"图片ID：{st.session_state.last_image_hash[:8] if st.session_state.last_image_hash else '无'} | 已发送图片至模型 | 图片描述：{data.get('_vision_description', '待获取')[:30] if data else '—'}")
+
     if data.get("error"):
-        st.error(f"图片分析失败，请检查 API Key / Base URL / 模型是否支持图片。\n\n错误详情：{data.get('message', '')}")
+        if data.get("vision_failed"):
+            st.error(data.get("message", "图片识别未成功，当前接口可能不支持 Vision 图片输入，请检查模型或中转站。"))
+        else:
+            st.error(f"图片分析失败，请检查 API Key / Base URL / 模型是否支持图片。\n\n错误详情：{data.get('message', '')}")
+        return
+
+    if data.get("error") == "not_palm" or (isinstance(data.get("message"), str) and "不是手掌" in data.get("message", "")):
+        st.warning("上传的图片不是手掌，无法进行掌纹解读，请重新上传。")
         return
 
     # 如果 extract_json 失败降级到 raw，尝试再解析一次

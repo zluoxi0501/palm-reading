@@ -391,10 +391,10 @@ def extract_json(text: str) -> dict | None:
 
 
 def verify_vision(client, b64: str, media_type: str) -> dict:
-    """先让模型描述图片内容，验证 Vision 是否生效"""
+    """让模型详细描述掌纹特征，作为后续报告生成的输入"""
     response = client.messages.create(
         model="claude-opus-4-6",
-        max_tokens=200,
+        max_tokens=600,
         messages=[
             {
                 "role": "user",
@@ -403,16 +403,29 @@ def verify_vision(client, b64: str, media_type: str) -> dict:
                         "type": "image",
                         "source": {"type": "base64", "media_type": media_type, "data": b64},
                     },
-                    {"type": "text", "text": "请用一句话描述你在这张图片中看到了什么（不超过50字）。"},
+                    {
+                        "type": "text",
+                        "text": """请仔细观察这张图片，回答以下问题：
+
+1. 这张图片是手掌吗？（是/否）
+2. 如果是手掌，请逐条描述你看到的掌纹特征：
+   - 智慧线（头脑线）：走向、长短、深浅、有无分叉、起点与生命线的关系
+   - 感情线（心线）：弧度、末端位置、是否分叉、线条深浅
+   - 生命线：弧度大小、是否饱满、有无断裂或岛纹
+   - 命运线：是否存在、起始位置、清晰程度
+   - 其他明显特征
+
+请用具体、客观的语言描述，不要做性格解读，只描述你看到的线条特征。"""
+                    },
                 ],
             }
         ],
     )
     description = response.content[0].text.strip()
-    # 如果描述里完全没有视觉内容关键词，判定 Vision 未生效
-    vision_keywords = ["图片", "图像", "看到", "显示", "手", "掌", "照片", "画面", "颜色", "物体", "人", "背景"]
+    vision_keywords = ["图片", "图像", "看到", "显示", "手", "掌", "照片", "画面", "颜色", "物体", "人", "背景", "线", "纹"]
     vision_ok = any(kw in description for kw in vision_keywords)
-    return {"description": description, "vision_ok": vision_ok}
+    is_palm = "是" in description[:20] or "手掌" in description[:50]
+    return {"description": description, "vision_ok": vision_ok, "is_palm": is_palm}
 
 
 def generate_free_report(image_bytes: bytes) -> dict:
@@ -420,7 +433,7 @@ def generate_free_report(image_bytes: bytes) -> dict:
         client = get_anthropic_client()
         b64, media_type = image_to_base64(image_bytes)
 
-        # ── Step 1: 验证 Vision 是否生效 ──
+        # ── Step 1: 获取详细掌纹观察描述 ──
         vision_check = verify_vision(client, b64, media_type)
         if not vision_check["vision_ok"]:
             return {
@@ -429,59 +442,59 @@ def generate_free_report(image_bytes: bytes) -> dict:
                 "message": f"图片识别未成功，当前接口可能不支持 Vision 图片输入，请检查模型或中转站。\n\n模型返回：{vision_check['description']}",
                 "vision_description": vision_check["description"],
             }
+        if not vision_check["is_palm"]:
+            return {
+                "error": True,
+                "not_palm": True,
+                "message": "上传的图片不是手掌，无法进行掌纹解读，请重新上传手掌照片。",
+                "vision_description": vision_check["description"],
+            }
 
-        prompt = """你是一位专业的掌纹解读师。请极其仔细地观察这张手掌图片中的每一条纹路。
+        image_description = vision_check["description"]
 
-第一步：先描述你实际看到的具体特征，例如：
-- 智慧线是笔直还是弯曲？起点与生命线粘连多长？末端走向哪里？
-- 感情线弧度高还是低？末端是否分叉？线条深浅如何？
-- 生命线弧度大还是小？是否有岛纹或断裂？
-- 命运线是否存在？从哪里起始？清晰还是模糊？
+        # ── Step 2: 把图片观察结果注入正式报告 prompt ──
+        prompt = f"""以下是模型基于用户上传图片看到的掌纹信息：
 
-如果图片不是手掌，请直接返回：{"error": "not_palm", "message": "图片不是手掌，无法进行掌纹解读"}
+{image_description}
 
-第二步：基于你观察到的具体特征，输出以下三个模块。每个模块的 interpretation 必须引用你看到的具体掌纹细节（如"你的感情线末端向食指方向弯曲"），不允许使用"你倾向于""你通常"等泛泛描述。
+请必须根据这些具体视觉信息生成报告。
+不要使用通用模板。
+不要生成与图片无关的固定内容。
+如果图片描述中没有足够掌纹细节，请在 interpretation 中明确说明"图片细节不足，以下为有限参考"。
+
+你是一位专业的掌纹解读师。基于上方的掌纹观察，输出以下三个模块的解读。
+每个模块的 interpretation 必须直接引用上方描述中的具体线条特征，不允许使用"你倾向于""你通常"等泛泛描述。
 
 输出格式（严格按此 JSON 格式）：
-{
-  "thinking_style": {
+{{
+  "thinking_style": {{
     "conclusion": "15字以内的核心结论",
-    "interpretation": "基于具体掌纹特征的2-3句解读，必须包含你观察到的线条细节"
-  },
-  "relationship_pattern": {
+    "interpretation": "必须引用上方掌纹描述中的具体特征，2-3句"
+  }},
+  "relationship_pattern": {{
     "conclusion": "15字以内的核心结论",
-    "interpretation": "基于具体掌纹特征的2-3句解读，必须包含你观察到的线条细节"
-  },
-  "wealth_path": {
+    "interpretation": "必须引用上方掌纹描述中的具体特征，2-3句"
+  }},
+  "wealth_path": {{
     "conclusion": "15字以内的核心结论",
-    "interpretation": "基于具体掌纹特征的2-3句解读，必须包含你观察到的线条细节"
-  }
-}
+    "interpretation": "必须引用上方掌纹描述中的具体特征，2-3句"
+  }}
+}}
 
 只输出 JSON，不要有任何前缀说明、后缀解释或 markdown 代码块。"""
 
         response = client.messages.create(
             model="claude-opus-4-6",
             max_tokens=1024,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {"type": "base64", "media_type": media_type, "data": b64},
-                        },
-                        {"type": "text", "text": prompt},
-                    ],
-                }
-            ],
+            messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
         )
         text = response.content[0].text
         result = extract_json(text)
         if result:
-            result["_vision_description"] = vision_check["description"]
+            result["_vision_description"] = image_description
+            result["_based_on_image"] = True
             return result
-        return {"raw": text, "_vision_description": vision_check["description"]}
+        return {"raw": text, "_vision_description": image_description, "_based_on_image": True}
     except Exception as e:
         return {"error": True, "message": str(e)}
 
@@ -491,7 +504,7 @@ def generate_full_report(image_bytes: bytes) -> dict:
         client = get_anthropic_client()
         b64, media_type = image_to_base64(image_bytes)
 
-        # ── Step 1: 验证 Vision 是否生效 ──
+        # ── Step 1: 获取详细掌纹观察描述 ──
         vision_check = verify_vision(client, b64, media_type)
         if not vision_check["vision_ok"]:
             return {
@@ -500,84 +513,84 @@ def generate_full_report(image_bytes: bytes) -> dict:
                 "message": f"图片识别未成功，当前接口可能不支持 Vision 图片输入，请检查模型或中转站。\n\n模型返回：{vision_check['description']}",
                 "vision_description": vision_check["description"],
             }
+        if not vision_check["is_palm"]:
+            return {
+                "error": True,
+                "not_palm": True,
+                "message": "上传的图片不是手掌，无法进行掌纹解读，请重新上传手掌照片。",
+                "vision_description": vision_check["description"],
+            }
 
-        prompt = """你是一位专业的掌纹解读师。请极其仔细地观察这张手掌图片中的每一条纹路。
+        image_description = vision_check["description"]
 
-第一步：先在脑中记录你实际看到的具体特征：
-- 智慧线（头脑线）：笔直/弯曲？起点与生命线粘连多长？末端走向？有无分叉？
-- 感情线（心线）：弧度高低？末端位置？是否分叉或有链状纹？线条深浅？
-- 生命线：弧度大小？是否饱满？有无岛纹、断裂或支线？
-- 命运线：是否存在？从哪里起始？清晰还是模糊？走向如何？
+        # ── Step 2: 把图片观察结果注入正式报告 prompt ──
+        prompt = f"""以下是模型基于用户上传图片看到的掌纹信息：
 
-如果图片不是手掌，请直接返回：{"error": "not_palm", "message": "图片不是手掌，无法进行掌纹解读"}
+{image_description}
 
-第二步：基于你观察到的具体特征，输出五个模块的深度分析。
-每个模块的 analysis 必须引用你看到的具体掌纹细节（如"你的感情线末端向食指方向弯曲且有轻微分叉"），禁止使用"你倾向于""你通常""你可能"等无法从图片验证的泛泛描述。
+请必须根据这些具体视觉信息生成报告。
+不要使用通用模板。
+不要生成与图片无关的固定内容。
+如果图片描述中没有足够掌纹细节，请在 analysis 中明确说明"图片细节不足，以下为有限参考"。
+
+你是一位专业的掌纹解读师。基于上方的掌纹观察，输出五个模块的深度分析。
+每个模块的 analysis 必须直接引用上方描述中的具体线条特征，禁止使用"你倾向于""你通常""你可能"等无法从图片验证的泛泛描述。
 blind_spots 和 suggestions 每条用 · 分隔。
 
 输出格式（严格按此 JSON 格式）：
-{
-  "decision_structure": {
+{{
+  "decision_structure": {{
     "conclusion": "15字以内",
-    "analysis": "3-4句，必须引用具体掌纹特征",
+    "analysis": "3-4句，必须引用上方掌纹描述中的具体特征",
     "blind_spots": "条目1 · 条目2 · 条目3",
     "suggestions": "条目1 · 条目2 · 条目3",
     "reminder": "一句金句"
-  },
-  "relationship_structure": {
+  }},
+  "relationship_structure": {{
     "conclusion": "15字以内",
-    "analysis": "3-4句，必须引用具体掌纹特征",
+    "analysis": "3-4句，必须引用上方掌纹描述中的具体特征",
     "blind_spots": "条目1 · 条目2 · 条目3",
     "suggestions": "条目1 · 条目2 · 条目3",
     "reminder": "一句金句"
-  },
-  "wealth_structure": {
+  }},
+  "wealth_structure": {{
     "conclusion": "15字以内",
-    "analysis": "3-4句，必须引用具体掌纹特征",
+    "analysis": "3-4句，必须引用上方掌纹描述中的具体特征",
     "blind_spots": "条目1 · 条目2 · 条目3",
     "suggestions": "条目1 · 条目2 · 条目3",
     "reminder": "一句金句"
-  },
-  "fate_line": {
+  }},
+  "fate_line": {{
     "conclusion": "15字以内",
-    "analysis": "3-4句，必须引用具体掌纹特征",
+    "analysis": "3-4句，必须引用上方掌纹描述中的具体特征",
     "blind_spots": "条目1 · 条目2 · 条目3",
     "suggestions": "条目1 · 条目2 · 条目3",
     "reminder": "一句金句"
-  },
-  "overall_advice": {
+  }},
+  "overall_advice": {{
     "decision": "针对此人掌纹的具体建议",
     "relationship": "针对此人掌纹的具体建议",
     "wealth": "针对此人掌纹的具体建议"
-  }
-}
+  }}
+}}
 
 只输出 JSON，不要有任何前缀说明、后缀解释或 markdown 代码块。"""
 
         response = client.messages.create(
             model="claude-opus-4-6",
             max_tokens=2048,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {"type": "base64", "media_type": media_type, "data": b64},
-                        },
-                        {"type": "text", "text": prompt},
-                    ],
-                }
-            ],
+            messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
         )
         text = response.content[0].text
         result = extract_json(text)
         if result:
-            result["_vision_description"] = vision_check["description"]
+            result["_vision_description"] = image_description
+            result["_based_on_image"] = True
             return result
-        return {"raw": text, "_vision_description": vision_check["description"]}
+        return {"raw": text, "_vision_description": image_description, "_based_on_image": True}
     except Exception as e:
         return {"error": True, "message": str(e)}
+
 
 
 # ---------------------------------------------------------------------------
@@ -702,7 +715,9 @@ def render_free_report():
     data = st.session_state.free_report_data
 
     # 调试信息
-    st.caption(f"图片ID：{st.session_state.last_image_hash[:8] if st.session_state.last_image_hash else '无'} | 已发送图片至模型 | 图片描述：{data.get('_vision_description', '待获取')[:30] if data else '—'}")
+    based = "是" if data.get("_based_on_image") else "否"
+    desc = data.get("_vision_description", "待获取")
+    st.caption(f"图片ID：{st.session_state.last_image_hash[:8] if st.session_state.last_image_hash else '无'} | 图片描述：{desc[:40]} | 报告是否基于图片描述生成：{based}")
 
     # Vision 失败或 API 错误
     if data.get("error"):
@@ -866,7 +881,9 @@ def render_full_report():
     data = st.session_state.full_report_data
 
     # 调试信息
-    st.caption(f"图片ID：{st.session_state.last_image_hash[:8] if st.session_state.last_image_hash else '无'} | 已发送图片至模型 | 图片描述：{data.get('_vision_description', '待获取')[:30] if data else '—'}")
+    based = "是" if data.get("_based_on_image") else "否"
+    desc = data.get("_vision_description", "待获取")
+    st.caption(f"图片ID：{st.session_state.last_image_hash[:8] if st.session_state.last_image_hash else '无'} | 图片描述：{desc[:40]} | 报告是否基于图片描述生成：{based}")
 
     if data.get("error"):
         if data.get("vision_failed"):
